@@ -107,12 +107,19 @@ For architecture and design details, see the original documentation:
 **RBAC with RH SSO** - Validated
 
 **Per-tenant Gateway** - Validated
+
 **AuthPolicy with JWT** - Validated
+
 **Request Rate Limiting** - Validated
+
 **Token Rate Limiting** - Validated
+
 **Tenant Prometheus Federation** - Validated
+
 **Grafana Dashboards** - Validated
+
 **TimescaleDB Billing** - Validated
+
 **Billing API with NULL handling** - Validated
 
 ## Files Updated for RH SSO Migration
