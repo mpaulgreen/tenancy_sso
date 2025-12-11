@@ -1,0 +1,53 @@
+# RBAC for tenant admins to access billing API
+# Grants tenant admin groups read access to billing API
+#
+# Apply with: oc apply -f 05-tenant-billing-access.yaml
+
+---
+# Role for accessing billing API
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: billing-api-viewer
+  namespace: maas-billing
+rules:
+- apiGroups: [""]
+  resources: ["services"]
+  resourceNames: ["billing-api"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["services/proxy"]
+  resourceNames: ["billing-api"]
+  verbs: ["get"]
+
+---
+# Tenant A billing access
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tenant-a-billing-view
+  namespace: maas-billing
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: billing-api-viewer
+subjects:
+- kind: Group
+  name: tenant-a-admins
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Tenant B billing access
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tenant-b-billing-view
+  namespace: maas-billing
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: billing-api-viewer
+subjects:
+- kind: Group
+  name: tenant-b-admins
+  apiGroup: rbac.authorization.k8s.io

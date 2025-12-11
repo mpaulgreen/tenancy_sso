@@ -1,0 +1,248 @@
+# Billing API Service
+# REST API for tier lookup, usage tracking, and cost calculation
+#
+# Apply with: oc apply -f 04-billing-api-deployment.yaml
+#
+# Wait for deployment:
+# oc wait --for=condition=available deployment/billing-api -n maas-billing --timeout=300s
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: billing-api
+  namespace: maas-billing
+
+---
+# ClusterRole for billing API to read cluster resources
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: billing-api-reader
+rules:
+- apiGroups: [""]
+  resources:
+    - namespaces
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["serving.kserve.io"]
+  resources:
+    - llminferenceservices
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources:
+    - services
+    - endpoints
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources:
+    - configmaps
+  verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: billing-api-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: billing-api-reader
+subjects:
+- kind: ServiceAccount
+  name: billing-api
+  namespace: maas-billing
+
+---
+# Tier to group mapping configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tier-to-group-mapping
+  namespace: maas-billing
+data:
+  tiers.yaml: |
+    tiers:
+      # Tenant A Tiers
+      - name: tenant-a-free
+        level: 0
+        tenant: tenant-a
+        groups:
+          - tenant-a-free-users
+          - tenant-a-developers
+        request_limit: 5
+        request_window: "2m"
+        token_limit: 1000
+        token_window: "1m"
+
+      - name: tenant-a-premium
+        level: 1
+        tenant: tenant-a
+        groups:
+          - tenant-a-premium-users
+          - tenant-a-ml-engineers
+        request_limit: 20
+        request_window: "2m"
+        token_limit: 50000
+        token_window: "1m"
+
+      - name: tenant-a-enterprise
+        level: 2
+        tenant: tenant-a
+        groups:
+          - tenant-a-admins
+          - tenant-a-enterprise-users
+        request_limit: 50
+        request_window: "2m"
+        token_limit: 100000
+        token_window: "1m"
+
+      # Tenant B Tiers
+      - name: tenant-b-free
+        level: 0
+        tenant: tenant-b
+        groups:
+          - tenant-b-free-users
+          - tenant-b-developers
+        request_limit: 5
+        request_window: "2m"
+        token_limit: 1000
+        token_window: "1m"
+
+      - name: tenant-b-premium
+        level: 1
+        tenant: tenant-b
+        groups:
+          - tenant-b-premium-users
+          - tenant-b-ml-engineers
+        request_limit: 20
+        request_window: "2m"
+        token_limit: 50000
+        token_window: "1m"
+
+      - name: tenant-b-enterprise
+        level: 2
+        tenant: tenant-b
+        groups:
+          - tenant-b-admins
+          - tenant-b-enterprise-users
+        request_limit: 50
+        request_window: "2m"
+        token_limit: 100000
+        token_window: "1m"
+
+    # Cost model configuration
+    cost_model:
+      gpu_hour_price: 2.50
+      token_million_price: 0.01
+      request_thousand_price: 0.10
+      storage_gb_month_price: 0.10
+
+---
+# Billing API Deployment
+# NOTE: This is a placeholder deployment. In production, replace with actual billing API image
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: billing-api
+  namespace: maas-billing
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: billing-api
+  template:
+    metadata:
+      labels:
+        app: billing-api
+    spec:
+      serviceAccountName: billing-api
+      containers:
+      - name: billing-api
+        # TODO: Replace with actual billing API image
+        # For now, using nginx-unprivileged which works in OpenShift (non-root)
+        image: nginxinc/nginx-unprivileged:alpine
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: TIER_CONFIG_PATH
+          value: /config/tiers.yaml
+        - name: POSTGRES_HOST
+          value: timescaledb.maas-billing.svc.cluster.local
+        - name: POSTGRES_PORT
+          value: "5432"
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: timescaledb-credentials
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: timescaledb-credentials
+              key: POSTGRES_PASSWORD
+        - name: POSTGRES_DB
+          valueFrom:
+            secretKeyRef:
+              name: timescaledb-credentials
+              key: POSTGRES_DB
+        volumeMounts:
+        - name: tier-config
+          mountPath: /config
+        resources:
+          requests:
+            cpu: "500m"
+            memory: 512Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+        # Health probes disabled for placeholder nginx
+        # TODO: Enable when actual billing API is deployed
+        # livenessProbe:
+        #   httpGet:
+        #     path: /health
+        #     port: 8080
+        #   initialDelaySeconds: 30
+        #   periodSeconds: 10
+        # readinessProbe:
+        #   httpGet:
+        #     path: /health
+        #     port: 8080
+        #   initialDelaySeconds: 5
+        #   periodSeconds: 5
+      volumes:
+      - name: tier-config
+        configMap:
+          name: tier-to-group-mapping
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: billing-api
+  namespace: maas-billing
+spec:
+  selector:
+    app: billing-api
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+  type: ClusterIP
+
+---
+# Route to expose billing API
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: billing-api
+  namespace: maas-billing
+spec:
+  to:
+    kind: Service
+    name: billing-api
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

@@ -1,0 +1,83 @@
+# NOTE: Before applying this file, set CLUSTER_DOMAIN environment variable:
+# export CLUSTER_DOMAIN=$(oc get route console -n openshift-console -o jsonpath='{.spec.host}' | sed 's/console-openshift-console\.//')
+# Then use: envsubst < 06-keycloak-client.yaml | oc apply -f -
+
+apiVersion: keycloak.org/v1alpha1
+kind: KeycloakClient
+metadata:
+  name: openshift-client
+  namespace: sso
+  labels:
+    app: sso
+spec:
+  client:
+    clientId: openshift
+    name: OpenShift
+    description: "OpenShift OAuth Client"
+    enabled: true
+    protocol: openid-connect
+    publicClient: false
+    bearerOnly: false
+    standardFlowEnabled: true
+    implicitFlowEnabled: false
+    directAccessGrantsEnabled: true
+    serviceAccountsEnabled: false
+    rootUrl: "https://oauth-openshift.${CLUSTER_DOMAIN}"
+    redirectUris:
+      - "https://oauth-openshift.${CLUSTER_DOMAIN}/oauth2callback/rhsso"
+    webOrigins:
+      - "https://oauth-openshift.${CLUSTER_DOMAIN}"
+    defaultClientScopes:
+      - profile
+      - email
+      - roles
+    optionalClientScopes:
+      - address
+      - phone
+    protocolMappers:
+      - name: groups
+        protocol: openid-connect
+        protocolMapper: oidc-group-membership-mapper
+        consentRequired: false
+        config:
+          full.path: "false"
+          id.token.claim: "true"
+          access.token.claim: "true"
+          claim.name: groups
+          userinfo.token.claim: "true"
+      - name: accountId
+        protocol: openid-connect
+        protocolMapper: oidc-usermodel-attribute-mapper
+        consentRequired: false
+        config:
+          userinfo.token.claim: "true"
+          user.attribute: accountId
+          id.token.claim: "true"
+          access.token.claim: "true"
+          claim.name: accountId
+          jsonType.label: String
+      - name: email
+        protocol: openid-connect
+        protocolMapper: oidc-usermodel-property-mapper
+        consentRequired: false
+        config:
+          userinfo.token.claim: "true"
+          user.attribute: email
+          id.token.claim: "true"
+          access.token.claim: "true"
+          claim.name: email
+          jsonType.label: String
+      - name: preferred_username
+        protocol: openid-connect
+        protocolMapper: oidc-usermodel-property-mapper
+        consentRequired: false
+        config:
+          userinfo.token.claim: "true"
+          user.attribute: email
+          id.token.claim: "true"
+          access.token.claim: "true"
+          claim.name: preferred_username
+          jsonType.label: String
+  realmSelector:
+    matchLabels:
+      app: sso

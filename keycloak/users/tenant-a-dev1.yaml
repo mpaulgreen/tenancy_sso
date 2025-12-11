@@ -1,0 +1,27 @@
+apiVersion: keycloak.org/v1alpha1
+kind: KeycloakUser
+metadata:
+  name: tenant-a-dev1
+  namespace: sso
+  labels:
+    app: sso
+    tenant: tenant-a
+    role: developer
+spec:
+  user:
+    username: tenant-a-dev1
+    email: tenant-a-dev1@tenant-a.com
+    emailVerified: true
+    enabled: true
+    firstName: tenant-a-dev1
+    lastName: developer
+    credentials:
+      - type: password
+        value: "password123"
+        temporary: false
+    attributes:
+      accountId:
+        - tenant-a
+  realmSelector:
+    matchLabels:
+      app: sso

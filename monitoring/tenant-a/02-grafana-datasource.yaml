@@ -1,0 +1,55 @@
+# Grafana datasource configuration
+# Configures Grafana to query Prometheus User Workload Monitoring
+#
+# Prerequisites: Cluster admin must have created ClusterRole and ClusterRoleBinding
+#                (see cluster-admin/06-tenant-grafana-rbac.yaml)
+#
+# Apply as tenant admin:
+# oc apply -f 02-grafana-datasource.yaml
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tenant-a-grafana-datasources
+  namespace: tenant-a-monitoring
+data:
+  prometheus.yaml: |
+    apiVersion: 1
+    datasources:
+    - name: Prometheus
+      type: prometheus
+      access: proxy
+      url: https://thanos-querier.openshift-monitoring.svc:9092
+      jsonData:
+        httpHeaderName1: "Authorization"
+        tlsSkipVerify: true
+        timeInterval: "30s"
+      secureJsonData:
+        httpHeaderValue1: "Bearer ${PROMETHEUS_TOKEN}"
+      isDefault: true
+      editable: false
+
+---
+# ServiceAccount for Grafana to query Prometheus
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tenant-a-grafana-prometheus
+  namespace: tenant-a-monitoring
+
+---
+# RoleBinding to grant 'view' access to tenant-a-models namespace
+# This allows the Thanos Querier tenancy port (9092) to return metrics for this namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tenant-a-grafana-view
+  namespace: tenant-a-models
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+- kind: ServiceAccount
+  name: tenant-a-grafana-prometheus
+  namespace: tenant-a-monitoring

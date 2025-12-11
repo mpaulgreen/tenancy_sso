@@ -1,0 +1,12 @@
+# Billing namespace for shared billing services
+# This namespace hosts the Billing API and TimescaleDB for all tenants
+#
+# Apply with: oc apply -f 02-maas-billing-namespace.yaml
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: maas-billing
+  labels:
+    kubernetes.io/metadata.name: maas-billing
+    name: maas-billing

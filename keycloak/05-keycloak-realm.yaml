@@ -1,0 +1,22 @@
+apiVersion: keycloak.org/v1alpha1
+kind: KeycloakRealm
+metadata:
+  name: maas-platform-realm
+  namespace: sso
+  labels:
+    app: sso
+spec:
+  realm:
+    id: maas-platform
+    realm: maas-platform
+    enabled: true
+    displayName: "MaaS Platform"
+    loginWithEmailAllowed: true
+    registrationAllowed: false
+    rememberMe: true
+    resetPasswordAllowed: true
+    verifyEmail: false
+    sslRequired: "external"
+  instanceSelector:
+    matchLabels:
+      app: sso

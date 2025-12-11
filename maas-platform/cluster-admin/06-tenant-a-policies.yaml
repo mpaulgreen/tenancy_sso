@@ -1,0 +1,211 @@
+# Tenant A Gateway Policies - Cluster Admin (RH SSO Version)
+#
+# This file contains AuthPolicy and RateLimitPolicy for Tenant A Gateway.
+# These policies MUST be created by cluster admin in the openshift-ingress namespace
+# because they target the Gateway resource.
+#
+# Prerequisites:
+# - 04-tenant-a-gateway.yaml applied (creates tenant-a-gateway)
+# - Red Hat SSO (Keycloak) configured with tenant-a groups
+# - MaaS API deployed (for tier lookup)
+# - RH SSO instance deployed in sso namespace
+#
+# Set environment variables:
+# export KEYCLOAK_URL=$(oc get route keycloak -n sso -o jsonpath='{.spec.host}')
+#
+# Apply with (as cluster admin):
+# cat cluster-admin/06-tenant-a-policies.yaml | envsubst | oc apply -f -
+
+---
+# AuthPolicy for Tenant A Gateway
+# Validates JWT from Red Hat SSO (Keycloak) and enforces tenant-a group membership
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: tenant-a-gateway-auth-policy
+  namespace: openshift-ingress
+  labels:
+    tenant: tenant-a
+    app.kubernetes.io/name: maas
+    app.kubernetes.io/component: auth-policy
+    app.kubernetes.io/part-of: model-as-a-service
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: tenant-a-gateway
+
+  rules:
+    # Step 1: Authenticate via RH SSO JWT
+    authentication:
+      tenant-a-jwt:
+        credentials:
+          authorizationHeader:
+            prefix: Bearer
+        jwt:
+          issuerUrl: https://${KEYCLOAK_URL}/auth/realms/maas-platform
+
+    # Step 2: Authorize - ensure user belongs to tenant-a
+    authorization:
+      tenant-validation:
+        opa:
+          rego: |
+            package tenant_validation
+
+            # RH SSO/Keycloak returns groups as an ARRAY (not string like IBM Verify)
+            # Example: groups: ["tenant-a-admins"]
+            # This rule checks if ANY group in the array starts with "tenant-a-"
+
+            # Allow if any group in the groups array starts with tenant-a-
+            allow {
+              some i
+              group := input.auth.identity.groups[i]
+              startswith(group, "tenant-a-")
+            }
+
+    # Step 3: Fetch tier information from MaaS API
+    metadata:
+      tenant-tier-lookup:
+        http:
+          url: http://maas-api.maas-api.svc.cluster.local:8080/v1/tiers/lookup
+          method: POST
+          contentType: application/json
+          body:
+            # RH SSO groups are already an array, pass directly
+            # IBM Verify had groups as string, required wrapping: '{ "groups": [auth.identity.groups] }'
+            # RH SSO has groups as array, pass as-is: '{ "groups": auth.identity.groups }'
+            expression: '{ "groups": auth.identity.groups }'
+        cache:
+          key:
+            # Cache by user ID (sub claim contains unique user ID)
+            selector: auth.identity.sub
+          ttl: 300  # Cache for 5 minutes
+
+    # Step 4: Inject user identity into request headers
+    response:
+      success:
+        filters:
+          identity:
+            json:
+              properties:
+                # Tier (from metadata lookup)
+                tier:
+                  expression: auth.metadata["tenant-tier-lookup"]["tier"]
+                # User ID (sub is Keycloak's internal UUID)
+                userid:
+                  expression: auth.identity.sub
+                # Username (email or username)
+                username:
+                  expression: auth.identity.preferred_username
+                # Groups (array in RH SSO)
+                groups:
+                  expression: auth.identity.groups
+
+---
+# RateLimitPolicy for Tenant A Gateway
+# Request-based rate limiting per user tier
+apiVersion: kuadrant.io/v1
+kind: RateLimitPolicy
+metadata:
+  name: tenant-a-gateway-rate-limits
+  namespace: openshift-ingress
+  labels:
+    tenant: tenant-a
+    app.kubernetes.io/name: maas
+    app.kubernetes.io/component: rate-limit-policy
+    app.kubernetes.io/part-of: model-as-a-service
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: tenant-a-gateway
+
+  limits:
+    # Free tier users: 5 requests per 2 minutes
+    # Maps to: tenant-a-developers, tenant-a-free-users
+    tenant-a-free:
+      rates:
+      - limit: 5
+        window: 2m
+      counters:
+      - expression: auth.identity.userid
+      when:
+      - predicate: |
+          auth.identity.tier == "tenant-a-free"
+
+    # Premium tier users: 20 requests per 2 minutes
+    # Maps to: tenant-a-ml-engineers, tenant-a-premium-users
+    tenant-a-premium:
+      rates:
+      - limit: 20
+        window: 2m
+      counters:
+      - expression: auth.identity.userid
+      when:
+      - predicate: |
+          auth.identity.tier == "tenant-a-premium"
+
+    # Enterprise tier users: 50 requests per 2 minutes
+    # Maps to: tenant-a-admins, tenant-a-enterprise-users
+    tenant-a-enterprise:
+      rates:
+      - limit: 50
+        window: 2m
+      counters:
+      - expression: auth.identity.userid
+      when:
+      - predicate: |
+          auth.identity.tier == "tenant-a-enterprise"
+
+---
+# TokenRateLimitPolicy for Tenant A Gateway
+# Token consumption rate limiting per user tier
+apiVersion: kuadrant.io/v1alpha1
+kind: TokenRateLimitPolicy
+metadata:
+  name: tenant-a-gateway-token-rate-limits
+  namespace: openshift-ingress
+  labels:
+    tenant: tenant-a
+    app.kubernetes.io/name: maas
+    app.kubernetes.io/component: token-rate-limit-policy
+    app.kubernetes.io/part-of: model-as-a-service
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: tenant-a-gateway
+
+  limits:
+    # Free tier users: 1000 tokens per 1 minute
+    tenant-a-free-tokens:
+      rates:
+      - limit: 1000
+        window: 1m
+      counters:
+      - expression: auth.identity.userid
+      when:
+      - predicate: |
+          auth.identity.tier == "tenant-a-free"
+
+    # Premium tier users: 50000 tokens per 1 minute
+    tenant-a-premium-tokens:
+      rates:
+      - limit: 50000
+        window: 1m
+      counters:
+      - expression: auth.identity.userid
+      when:
+      - predicate: |
+          auth.identity.tier == "tenant-a-premium"
+
+    # Enterprise tier users: 100000 tokens per 1 minute
+    tenant-a-enterprise-tokens:
+      rates:
+      - limit: 100000
+        window: 1m
+      counters:
+      - expression: auth.identity.userid
+      when:
+      - predicate: |
+          auth.identity.tier == "tenant-a-enterprise"

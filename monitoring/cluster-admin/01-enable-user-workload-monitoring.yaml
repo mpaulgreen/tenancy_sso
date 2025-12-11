@@ -1,0 +1,25 @@
+# Enable User Workload Monitoring
+# This configures the cluster to enable Prometheus User Workload Monitoring
+# which allows tenant workloads to be scraped for metrics.
+#
+# Apply with: oc apply -f 01-enable-user-workload-monitoring.yaml
+#
+# Wait for user workload monitoring pods to start:
+# oc get pods -n openshift-user-workload-monitoring -w
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-monitoring-config
+  namespace: openshift-monitoring
+data:
+  config.yaml: |
+    enableUserWorkload: true
+    prometheusK8s:
+      retention: 15d
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp3-csi
+          resources:
+            requests:
+              storage: 100Gi

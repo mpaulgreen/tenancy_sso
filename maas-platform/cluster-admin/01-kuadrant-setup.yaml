@@ -1,0 +1,52 @@
+# Kuadrant Setup - Cluster Admin
+#
+# This file sets up the core Kuadrant infrastructure required for multi-tenant MaaS platform.
+# Must be applied by cluster admin before tenant resources.
+#
+# Prerequisites:
+# - RHOAI 3.0.0+ installed
+# - Kuadrant operator installed
+#
+# Apply with:
+# oc apply -f 01-kuadrant-setup.yaml
+
+---
+# Namespace for Kuadrant
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kuadrant-system
+  labels:
+    app.kubernetes.io/name: kuadrant
+    app.kubernetes.io/part-of: model-as-a-service
+
+---
+# Kuadrant CR - Creates Authorino and Limitador instances
+apiVersion: kuadrant.io/v1beta1
+kind: Kuadrant
+metadata:
+  name: kuadrant
+  namespace: kuadrant-system
+spec: {}
+
+---
+# OpenShift AI Inference Gateway (Required by RHOAI base configurations)
+# NOTE: This gateway is referenced by LLMInferenceService preset configurations
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: openshift-ai-inference
+  namespace: openshift-ingress
+  labels:
+    app.kubernetes.io/name: openshift-ai
+    app.kubernetes.io/component: inference-gateway
+    app.kubernetes.io/part-of: red-hat-openshift-ai
+spec:
+  gatewayClassName: data-science-gateway-class
+  listeners:
+  - name: http
+    port: 80
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: All

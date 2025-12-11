@@ -1,0 +1,235 @@
+# Grafana dashboard provisioning
+# Configures Grafana to load dashboards from ConfigMaps
+#
+# Apply as tenant admin:
+# oc apply -f 04-grafana-dashboards.yaml
+
+---
+# Dashboard provisioning configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tenant-a-grafana-dashboards-provisioning
+  namespace: tenant-a-monitoring
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+    - name: 'default'
+      orgId: 1
+      folder: ''
+      type: file
+      disableDeletion: false
+      updateIntervalSeconds: 30
+      allowUiUpdates: true
+      options:
+        path: /var/lib/grafana/dashboards
+
+---
+# Model usage overview dashboard
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tenant-a-grafana-dashboards
+  namespace: tenant-a-monitoring
+data:
+  tenant-a-model-usage.json: |
+    {
+      "title": "Tenant A - Model Usage Overview",
+        "uid": "tenant-a-model-usage",
+        "timezone": "browser",
+        "schemaVersion": 16,
+        "version": 0,
+        "refresh": "30s",
+        "panels": [
+          {
+            "id": 1,
+            "title": "Request Rate",
+            "type": "graph",
+            "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+            "targets": [
+              {
+                "expr": "rate(kserve_vllm:request_success_total{namespace=\"tenant-a-models\"}[5m])",
+                "legendFormat": "{{pod}} - Success",
+                "refId": "A"
+              },
+              {
+                "expr": "rate(kserve_vllm:request_failure_total{namespace=\"tenant-a-models\"}[5m])",
+                "legendFormat": "{{pod}} - Failure",
+                "refId": "B"
+              }
+            ],
+            "yaxes": [
+              { "label": "requests/sec", "format": "reqps" },
+              { "show": false }
+            ]
+          },
+          {
+            "id": 2,
+            "title": "Token Throughput",
+            "type": "graph",
+            "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+            "targets": [
+              {
+                "expr": "rate(kserve_vllm:prompt_tokens_total{namespace=\"tenant-a-models\"}[5m])",
+                "legendFormat": "{{pod}} - Prompt Tokens",
+                "refId": "A"
+              },
+              {
+                "expr": "rate(kserve_vllm:generation_tokens_total{namespace=\"tenant-a-models\"}[5m])",
+                "legendFormat": "{{pod}} - Generation Tokens",
+                "refId": "B"
+              }
+            ],
+            "yaxes": [
+              { "label": "tokens/sec", "format": "short" },
+              { "show": false }
+            ]
+          },
+          {
+            "id": 3,
+            "title": "Total Tokens (Today)",
+            "type": "stat",
+            "gridPos": { "x": 0, "y": 8, "w": 6, "h": 4 },
+            "targets": [
+              {
+                "expr": "sum(increase(kserve_vllm:prompt_tokens_total{namespace=\"tenant-a-models\"}[24h])) + sum(increase(kserve_vllm:generation_tokens_total{namespace=\"tenant-a-models\"}[24h]))",
+                "refId": "A"
+              }
+            ],
+            "options": {
+              "graphMode": "none",
+              "colorMode": "value"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "decimals": 0
+              }
+            }
+          },
+          {
+            "id": 4,
+            "title": "Total Requests (Today)",
+            "type": "stat",
+            "gridPos": { "x": 6, "y": 8, "w": 6, "h": 4 },
+            "targets": [
+              {
+                "expr": "sum(increase(kserve_vllm:request_success_total{namespace=\"tenant-a-models\"}[24h]))",
+                "refId": "A"
+              }
+            ],
+            "options": {
+              "graphMode": "none",
+              "colorMode": "value"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "decimals": 0
+              }
+            }
+          },
+          {
+            "id": 5,
+            "title": "P95 Time to First Token (TTFT)",
+            "type": "gauge",
+            "gridPos": { "x": 12, "y": 8, "w": 6, "h": 4 },
+            "targets": [
+              {
+                "expr": "histogram_quantile(0.95, rate(kserve_vllm:time_to_first_token_seconds_bucket{namespace=\"tenant-a-models\"}[5m]))",
+                "refId": "A"
+              }
+            ],
+            "options": {
+              "showThresholdLabels": false,
+              "showThresholdMarkers": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "s",
+                "min": 0,
+                "max": 1,
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "value": 0, "color": "green" },
+                    { "value": 0.5, "color": "yellow" },
+                    { "value": 0.8, "color": "red" }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": 6,
+            "title": "P95 Inter-Token Latency (ITL)",
+            "type": "gauge",
+            "gridPos": { "x": 18, "y": 8, "w": 6, "h": 4 },
+            "targets": [
+              {
+                "expr": "histogram_quantile(0.95, rate(kserve_vllm:time_per_output_token_seconds_bucket{namespace=\"tenant-a-models\"}[5m]))",
+                "refId": "A"
+              }
+            ],
+            "options": {
+              "showThresholdLabels": false,
+              "showThresholdMarkers": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "s",
+                "min": 0,
+                "max": 0.1,
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "value": 0, "color": "green" },
+                    { "value": 0.05, "color": "yellow" },
+                    { "value": 0.08, "color": "red" }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": 7,
+            "title": "GPU Cache Utilization",
+            "type": "graph",
+            "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+            "targets": [
+              {
+                "expr": "kserve_vllm:gpu_cache_usage_perc{namespace=\"tenant-a-models\"}",
+                "legendFormat": "{{pod}}",
+                "refId": "A"
+              }
+            ],
+            "yaxes": [
+              { "label": "Percentage", "format": "percent", "min": 0, "max": 100 },
+              { "show": false }
+            ]
+          },
+          {
+            "id": 8,
+            "title": "Queue Depth",
+            "type": "graph",
+            "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+            "targets": [
+              {
+                "expr": "kserve_vllm:num_requests_running{namespace=\"tenant-a-models\"}",
+                "legendFormat": "{{pod}} - Running",
+                "refId": "A"
+              },
+              {
+                "expr": "kserve_vllm:num_requests_waiting{namespace=\"tenant-a-models\"}",
+                "legendFormat": "{{pod}} - Waiting",
+                "refId": "B"
+              }
+            ],
+            "yaxes": [
+              { "label": "Requests", "format": "short" },
+              { "show": false }
+            ]
+          }
+        ]
+    }

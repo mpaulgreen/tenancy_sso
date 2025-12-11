@@ -1,0 +1,68 @@
+# Grafana datasource configuration
+# Configures Grafana to query Prometheus User Workload Monitoring
+#
+# Prerequisites: Cluster admin must have created ClusterRole and ClusterRoleBinding
+#                (see cluster-admin/06-tenant-grafana-rbac.yaml)
+#
+# Apply as tenant admin:
+# oc apply -f 02-grafana-datasource.yaml
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tenant-b-grafana-datasources
+  namespace: tenant-b-monitoring
+data:
+  prometheus.yaml: |
+    apiVersion: 1
+    datasources:
+    - name: Prometheus
+      type: prometheus
+      access: proxy
+      url: https://thanos-querier.openshift-user-workload-monitoring.svc:9091
+      jsonData:
+        httpHeaderName1: "Authorization"
+        tlsSkipVerify: true
+        timeInterval: "30s"
+      secureJsonData:
+        httpHeaderValue1: "Bearer ${PROMETHEUS_TOKEN}"
+      isDefault: true
+      editable: false
+
+---
+# ServiceAccount for Grafana to query Prometheus
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tenant-b-grafana-prometheus
+  namespace: tenant-b-monitoring
+
+---
+# Role to view metrics in tenant-b-models namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: prometheus-metrics-viewer
+  namespace: tenant-b-models
+rules:
+- apiGroups: [""]
+  resources:
+  - pods
+  - services
+  - endpoints
+  verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tenant-b-grafana-metrics-viewer
+  namespace: tenant-b-models
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: prometheus-metrics-viewer
+subjects:
+- kind: ServiceAccount
+  name: tenant-b-grafana-prometheus
+  namespace: tenant-b-monitoring

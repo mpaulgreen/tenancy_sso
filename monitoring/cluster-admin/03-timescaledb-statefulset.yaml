@@ -1,0 +1,273 @@
+# TimescaleDB for long-term billing data storage
+# This database stores aggregated metrics beyond Prometheus retention period
+#
+# Apply with: oc apply -f 03-timescaledb-statefulset.yaml
+#
+# Wait for pod to be ready:
+# oc wait --for=condition=ready pod -l app=timescaledb -n maas-billing --timeout=300s
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: timescaledb-credentials
+  namespace: maas-billing
+type: Opaque
+stringData:
+  POSTGRES_USER: billing
+  POSTGRES_PASSWORD: changeme-please
+  POSTGRES_DB: maas_billing
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: timescaledb-data
+  namespace: maas-billing
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: gp3-csi
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: timescaledb
+  namespace: maas-billing
+spec:
+  serviceName: timescaledb
+  replicas: 1
+  selector:
+    matchLabels:
+      app: timescaledb
+  template:
+    metadata:
+      labels:
+        app: timescaledb
+    spec:
+      containers:
+      - name: timescaledb
+        image: timescale/timescaledb:latest-pg14
+        ports:
+        - containerPort: 5432
+          name: postgres
+        env:
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: timescaledb-credentials
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: timescaledb-credentials
+              key: POSTGRES_PASSWORD
+        - name: POSTGRES_DB
+          valueFrom:
+            secretKeyRef:
+              name: timescaledb-credentials
+              key: POSTGRES_DB
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+        resources:
+          requests:
+            cpu: "2"
+            memory: 4Gi
+          limits:
+            cpu: "4"
+            memory: 8Gi
+        livenessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - billing
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - billing
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: timescaledb-data
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: timescaledb
+  namespace: maas-billing
+spec:
+  selector:
+    app: timescaledb
+  ports:
+  - port: 5432
+    targetPort: 5432
+    name: postgres
+  type: ClusterIP
+
+---
+# ConfigMap with schema initialization SQL
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: timescaledb-init
+  namespace: maas-billing
+data:
+  init.sql: |
+    -- Create TimescaleDB extension
+    CREATE EXTENSION IF NOT EXISTS timescaledb;
+
+    -- Tenant usage table (hypertable for time-series data)
+    CREATE TABLE IF NOT EXISTS tenant_usage (
+        time TIMESTAMPTZ NOT NULL,
+        tenant TEXT NOT NULL,
+        namespace TEXT NOT NULL,
+        model TEXT NOT NULL,
+
+        -- Usage metrics
+        tokens_prompt BIGINT DEFAULT 0,
+        tokens_completion BIGINT DEFAULT 0,
+        tokens_total BIGINT GENERATED ALWAYS AS (tokens_prompt + tokens_completion) STORED,
+        requests INTEGER DEFAULT 0,
+        gpu_hours NUMERIC(10,4) DEFAULT 0,
+
+        -- Cost metrics
+        cost_tokens NUMERIC(10,4) DEFAULT 0,
+        cost_gpu NUMERIC(10,4) DEFAULT 0,
+        cost_requests NUMERIC(10,4) DEFAULT 0,
+        cost_total NUMERIC(10,4) GENERATED ALWAYS AS (cost_tokens + cost_gpu + cost_requests) STORED,
+
+        -- Metadata
+        created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    -- Convert to hypertable
+    SELECT create_hypertable('tenant_usage', 'time', if_not_exists => TRUE);
+
+    -- Create indexes
+    CREATE INDEX IF NOT EXISTS idx_tenant_usage_tenant ON tenant_usage (tenant, time DESC);
+    CREATE INDEX IF NOT EXISTS idx_tenant_usage_model ON tenant_usage (model, time DESC);
+
+    -- Retention policy (drop data older than 12 months)
+    SELECT add_retention_policy('tenant_usage', INTERVAL '12 months', if_not_exists => TRUE);
+
+    -- Continuous aggregate for daily rollup
+    CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_usage_daily
+    WITH (timescaledb.continuous) AS
+    SELECT
+        time_bucket('1 day', time) AS day,
+        tenant,
+        namespace,
+        model,
+        SUM(tokens_total) AS tokens_total,
+        SUM(requests) AS requests,
+        SUM(gpu_hours) AS gpu_hours,
+        SUM(cost_total) AS cost_total
+    FROM tenant_usage
+    GROUP BY day, tenant, namespace, model;
+
+    -- Refresh policy for continuous aggregate
+    SELECT add_continuous_aggregate_policy('tenant_usage_daily',
+        start_offset => INTERVAL '3 days',
+        end_offset => INTERVAL '1 day',
+        schedule_interval => INTERVAL '1 hour',
+        if_not_exists => TRUE);
+
+    -- Monthly cost summary table
+    CREATE TABLE IF NOT EXISTS tenant_monthly_costs (
+        month DATE NOT NULL,
+        tenant TEXT NOT NULL,
+        namespace TEXT NOT NULL,
+
+        total_tokens BIGINT,
+        total_requests INTEGER,
+        total_gpu_hours NUMERIC(10,2),
+
+        cost_tokens NUMERIC(10,2),
+        cost_gpu NUMERIC(10,2),
+        cost_requests NUMERIC(10,2),
+        cost_storage NUMERIC(10,2),
+        cost_total NUMERIC(10,2),
+
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+
+        PRIMARY KEY (month, tenant, namespace)
+    );
+
+    -- Request history table (for audit trail)
+    CREATE TABLE IF NOT EXISTS tenant_requests (
+        id BIGSERIAL,
+        time TIMESTAMPTZ NOT NULL,
+        tenant TEXT NOT NULL,
+        namespace TEXT NOT NULL,
+        model TEXT NOT NULL,
+        user_id TEXT,
+
+        tokens_prompt INTEGER,
+        tokens_completion INTEGER,
+        duration_ms INTEGER,
+
+        status TEXT,
+        error_message TEXT,
+
+        PRIMARY KEY (id, time)
+    );
+
+    SELECT create_hypertable('tenant_requests', 'time', if_not_exists => TRUE);
+    SELECT add_retention_policy('tenant_requests', INTERVAL '90 days', if_not_exists => TRUE);
+
+    CREATE INDEX IF NOT EXISTS idx_tenant_requests_time ON tenant_requests (time DESC);
+    CREATE INDEX IF NOT EXISTS idx_tenant_requests_tenant ON tenant_requests (tenant, time DESC);
+    CREATE INDEX IF NOT EXISTS idx_tenant_requests_user ON tenant_requests (user_id, time DESC);
+
+    -- Pricing configuration table
+    CREATE TABLE IF NOT EXISTS pricing_config (
+        id SERIAL PRIMARY KEY,
+        tenant TEXT,
+        component TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        price NUMERIC(10,4) NOT NULL,
+        currency TEXT DEFAULT 'USD',
+        effective_from TIMESTAMPTZ NOT NULL,
+        effective_until TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(tenant, component, effective_from)
+    );
+
+    -- Insert default pricing (applies to all tenants unless overridden)
+    INSERT INTO pricing_config (tenant, component, unit, price, effective_from) VALUES
+    (NULL, 'tokens', 'per_million', 0.01, '2025-01-01 00:00:00'),
+    (NULL, 'gpu', 'per_hour', 2.50, '2025-01-01 00:00:00'),
+    (NULL, 'requests', 'per_thousand', 0.10, '2025-01-01 00:00:00')
+    ON CONFLICT DO NOTHING;
+
+    -- Tenant configuration table
+    CREATE TABLE IF NOT EXISTS tenant_config (
+        id SERIAL PRIMARY KEY,
+        tenant TEXT UNIQUE NOT NULL,
+        prometheus_url TEXT NOT NULL,
+        namespace TEXT NOT NULL,
+        enabled BOOLEAN DEFAULT true,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    -- Insert tenant configurations
+    INSERT INTO tenant_config (tenant, prometheus_url, namespace) VALUES
+    ('tenant-a', 'http://tenant-a-prometheus.tenant-a-monitoring.svc:9090', 'tenant-a-models'),
+    ('tenant-b', 'http://tenant-b-prometheus.tenant-b-monitoring.svc:9090', 'tenant-b-models')
+    ON CONFLICT DO NOTHING;

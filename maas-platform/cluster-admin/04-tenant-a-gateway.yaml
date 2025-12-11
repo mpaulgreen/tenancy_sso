@@ -1,0 +1,57 @@
+# Tenant A Gateway - Cluster Admin
+#
+# This file creates a dedicated Gateway for Tenant A with hostname-based routing.
+# Per-tenant gateways provide the strongest isolation for multi-tenancy (Option 3).
+#
+# Gateways are created in openshift-ingress namespace and require cluster-admin permissions.
+#
+# Prerequisites:
+# - 03-tenant-namespaces.yaml applied (tenant-a-models namespace created)
+# - Set environment variables:
+#   export CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+#
+# Apply with (as cluster admin):
+# cat 04-tenant-a-gateway.yaml | envsubst | oc apply -f -
+
+---
+# Dedicated Gateway for Tenant A
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tenant-a-gateway
+  namespace: openshift-ingress
+  labels:
+    tenant: tenant-a
+    app.kubernetes.io/name: maas
+    app.kubernetes.io/component: gateway
+    app.kubernetes.io/instance: tenant-a-gateway
+    app.kubernetes.io/part-of: model-as-a-service
+    opendatahub.io/managed: "false"
+  annotations:
+    opendatahub.io/managed: "false"
+spec:
+  gatewayClassName: data-science-gateway-class
+  listeners:
+  # HTTP listener (will redirect to HTTPS)
+  - name: http
+    port: 80
+    protocol: HTTP
+    hostname: "tenant-a.maas.${CLUSTER_DOMAIN}"
+    allowedRoutes:
+      namespaces:
+        from: All
+
+  # HTTPS listener for secure traffic
+  - name: https
+    port: 443
+    protocol: HTTPS
+    hostname: "tenant-a.maas.${CLUSTER_DOMAIN}"
+    allowedRoutes:
+      namespaces:
+        from: All
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - kind: Secret
+        group: ""
+        name: default-gateway-tls

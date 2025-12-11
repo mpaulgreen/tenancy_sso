@@ -1,0 +1,55 @@
+# Tenant Grafana RBAC for Thanos Querier Access
+# These are cluster-scoped resources that must be created by cluster admin
+#
+# Apply as cluster admin:
+# oc apply -f 06-tenant-grafana-rbac.yaml
+# Move this to rbac implementation. - TODO
+
+---
+# Role for accessing Thanos Querier service in openshift-monitoring namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: thanos-querier-proxy-access
+  namespace: openshift-monitoring
+rules:
+- apiGroups: [""]
+  resources:
+  - services/proxy
+  resourceNames:
+  - thanos-querier
+  - thanos-querier:web
+  - thanos-querier:tenancy
+  verbs: ["get", "create"]
+
+---
+# RoleBinding for Tenant A Grafana
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tenant-a-grafana-thanos-access
+  namespace: openshift-monitoring
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: thanos-querier-proxy-access
+subjects:
+- kind: ServiceAccount
+  name: tenant-a-grafana-prometheus
+  namespace: tenant-a-monitoring
+
+---
+# RoleBinding for Tenant B Grafana
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tenant-b-grafana-thanos-access
+  namespace: openshift-monitoring
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: thanos-querier-proxy-access
+subjects:
+- kind: ServiceAccount
+  name: tenant-b-grafana-prometheus
+  namespace: tenant-b-monitoring

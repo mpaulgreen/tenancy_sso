@@ -1,0 +1,139 @@
+# Tenant A Model Deployment - LLMInferenceService
+#
+# This file deploys the Granite 3.1 8B Instruct model for Tenant A.
+# The model uses vLLM runtime with FP8 quantization for efficient inference.
+#
+# Prerequisites:
+# - tenant-a-models namespace exists
+# - tenant-a-gateway exists in openshift-ingress namespace (created by cluster admin)
+# - GPU nodes available in the cluster
+# - quay-pull-secret exists in tenant-a-models namespace (if using private registry)
+# - Set environment variable:
+#   export CLUSTER_DOMAIN="<YOUR-CLUSTER-DOMAIN>"  # e.g., apps.minai.kni.syseng.devcluster.openshift.com
+#
+# Apply with (as tenant admin - alice@tenant-a.com):
+# cat 00-tenant-a-model.yaml | envsubst | oc apply -f -
+
+---
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceService
+metadata:
+  name: granite-3-1-8b-instruct-fp8
+  namespace: tenant-a-models
+  annotations:
+    alpha.maas.opendatahub.io/tiers: '[]'
+  labels:
+    tenant: tenant-a
+    app.kubernetes.io/name: maas
+    app.kubernetes.io/component: model
+    app.kubernetes.io/instance: granite-3-1-8b-instruct-fp8
+    app.kubernetes.io/part-of: model-as-a-service
+spec:
+  # Model configuration
+  model:
+    name: granite-3.1-8b-instruct-fp8
+    uri: oci://quay.io/mpaulgreen/granite-3.1-8b-instruct-fp8:gori-1.0
+
+  # Number of replicas
+  replicas: 1
+
+  # Router configuration - references tenant-a-gateway
+  router:
+    gateway:
+      refs:
+      - name: tenant-a-gateway
+        namespace: openshift-ingress
+    # Empty route allows controller to auto-generate HTTPRoute with backendRefs
+    route: {}
+
+  # Pod template for vLLM inference server
+  template:
+    containers:
+    - name: main
+      image: docker.io/vllm/vllm-openai:v0.6.6.post1
+      imagePullPolicy: IfNotPresent
+
+      # vLLM server command
+      command:
+      - python3
+      - -m
+      - vllm.entrypoints.openai.api_server
+
+      # vLLM configuration arguments
+      args:
+      - --port=8000
+      - --model=/mnt/models
+      - --served-model-name=granite-3.1-8b-instruct-fp8
+      - --quantization=fp8
+      - --tensor-parallel-size=1
+      - --gpu-memory-utilization=0.85
+      - --dtype=auto
+      - --max-model-len=4096
+      - --max-num-seqs=128
+      - --enable-chunked-prefill
+      - --enable-prefix-caching
+      - --disable-log-requests
+      - --trust-remote-code
+      - --ssl-certfile=/var/run/kserve/tls/tls.crt
+      - --ssl-keyfile=/var/run/kserve/tls/tls.key
+
+      # Environment variables
+      env:
+      - name: HF_HOME
+        value: /tmp/hf_home
+      - name: VLLM_NO_USAGE_STATS
+        value: "1"
+      - name: HF_HUB_OFFLINE
+        value: "1"
+      - name: CUDA_VISIBLE_DEVICES
+        value: "0"
+      - name: NVIDIA_VISIBLE_DEVICES
+        value: all
+      - name: NVIDIA_DRIVER_CAPABILITIES
+        value: compute,utility
+
+      # Resource requests and limits
+      resources:
+        requests:
+          cpu: "8"
+          memory: 32Gi
+          nvidia.com/gpu: "1"
+        limits:
+          cpu: "16"
+          memory: 64Gi
+          nvidia.com/gpu: "1"
+
+      # Health probes
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: 8000
+          scheme: HTTPS
+        initialDelaySeconds: 180
+        periodSeconds: 30
+        timeoutSeconds: 30
+        failureThreshold: 5
+
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 8000
+          scheme: HTTPS
+        initialDelaySeconds: 180
+        periodSeconds: 10
+        timeoutSeconds: 10
+        failureThreshold: 30
+
+    # Image pull secrets (if using private registry)
+    imagePullSecrets:
+    - name: quay-pull-secret
+
+    # Node selector for GPU nodes
+    nodeSelector:
+      nvidia.com/gpu.present: "true"
+
+    # Tolerations for GPU taints
+    tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule

@@ -1,0 +1,36 @@
+# Tenant Prometheus RBAC for Federation
+# These are cluster-scoped resources that must be created by cluster admin
+# to allow tenant Prometheus instances to federate metrics from User Workload Prometheus
+#
+# Apply as cluster admin:
+# oc apply -f 07-tenant-prometheus-rbac.yaml
+
+---
+# ClusterRoleBinding for Tenant A Prometheus to access federation endpoint
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tenant-a-prometheus-cluster-monitoring-view
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-monitoring-view
+subjects:
+- kind: ServiceAccount
+  name: tenant-a-prometheus
+  namespace: tenant-a-monitoring
+
+---
+# ClusterRoleBinding for Tenant B Prometheus to access federation endpoint
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tenant-b-prometheus-cluster-monitoring-view
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-monitoring-view
+subjects:
+- kind: ServiceAccount
+  name: tenant-b-prometheus
+  namespace: tenant-b-monitoring

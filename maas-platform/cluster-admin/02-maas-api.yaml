@@ -1,0 +1,281 @@
+# MaaS API - Cluster Admin
+#
+# This file deploys the shared MaaS API that serves all tenants.
+# The MaaS API handles tier lookups and model discovery across all tenant namespaces.
+#
+# Prerequisites:
+# - 01-kuadrant-setup.yaml applied
+# - Set environment variables before applying:
+#   export CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+#
+# Apply with:
+# cat 02-maas-api.yaml | envsubst | oc apply -f -
+
+---
+# Namespace for MaaS API
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: maas-api
+  labels:
+    app.kubernetes.io/name: maas-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: model-as-a-service
+
+---
+# ServiceAccount for MaaS API
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: maas-api
+  namespace: maas-api
+  labels:
+    app.kubernetes.io/name: maas-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: model-as-a-service
+
+---
+# ClusterRole for MaaS API
+# Allows MaaS API to discover models and services across tenant namespaces
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: maas-api
+  labels:
+    app.kubernetes.io/name: maas-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: model-as-a-service
+rules:
+# ConfigMap access for tier mappings
+- apiGroups: [""]
+  resources: [configmaps]
+  verbs: [get, list, watch, create, update, patch, delete]
+
+# Namespace access for tenant discovery
+- apiGroups: [""]
+  resources: [namespaces]
+  verbs: [get, list, watch]
+
+# ServiceAccount token creation (for model access)
+- apiGroups: [""]
+  resources: [serviceaccounts, serviceaccounts/token]
+  verbs: [get, list, watch, create]
+
+# Token validation
+- apiGroups: [authentication.k8s.io]
+  resources: [tokenreviews]
+  verbs: [create]
+
+# Model resource access across all tenant namespaces
+- apiGroups: [serving.kserve.io]
+  resources: [inferenceservices, llminferenceservices]
+  verbs: [get, list, watch]
+
+# Service and endpoint discovery for models
+- apiGroups: [""]
+  resources: [pods, services, endpoints]
+  verbs: [get, list, watch]
+
+---
+# ClusterRoleBinding for MaaS API
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: maas-api
+  labels:
+    app.kubernetes.io/name: maas-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: model-as-a-service
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: maas-api
+subjects:
+- kind: ServiceAccount
+  name: maas-api
+  namespace: maas-api
+
+---
+# Multi-Tenant Tier Configuration ConfigMap
+# NOTE: This configmap now includes per-tenant tier definitions
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tier-to-group-mapping
+  namespace: maas-api
+  labels:
+    app: maas-api
+    app.kubernetes.io/name: maas-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: model-as-a-service
+    component: tier-mapping
+data:
+  tiers: |
+    # Multi-Tenant Tier Configuration
+    # Each tenant has separate tier definitions with their own rate limits
+
+    # Tenant A Tiers
+    - name: tenant-a-free
+      level: 0
+      tenant: tenant-a
+      groups:
+        - tenant-a-free-users
+        - tenant-a-developers  # Read-only developers get free tier
+      request_limit: 5
+      request_window: "2m"
+      token_limit: 1000
+      token_window: "1m"
+
+    - name: tenant-a-premium
+      level: 1
+      tenant: tenant-a
+      groups:
+        - tenant-a-premium-users
+        - tenant-a-ml-engineers  # ML engineers get premium tier
+      request_limit: 20
+      request_window: "2m"
+      token_limit: 50000
+      token_window: "1m"
+
+    - name: tenant-a-enterprise
+      level: 2
+      tenant: tenant-a
+      groups:
+        - tenant-a-admins  # Tenant admins get enterprise tier
+        - tenant-a-enterprise-users
+      request_limit: 50
+      request_window: "2m"
+      token_limit: 100000
+      token_window: "1m"
+
+    # Tenant B Tiers
+    - name: tenant-b-free
+      level: 0
+      tenant: tenant-b
+      groups:
+        - tenant-b-free-users
+        - tenant-b-developers
+      request_limit: 5
+      request_window: "2m"
+      token_limit: 1000
+      token_window: "1m"
+
+    - name: tenant-b-premium
+      level: 1
+      tenant: tenant-b
+      groups:
+        - tenant-b-premium-users
+        - tenant-b-ml-engineers
+      request_limit: 20
+      request_window: "2m"
+      token_limit: 50000
+      token_window: "1m"
+
+    - name: tenant-b-enterprise
+      level: 2
+      tenant: tenant-b
+      groups:
+        - tenant-b-admins
+        - tenant-b-enterprise-users
+      request_limit: 50
+      request_window: "2m"
+      token_limit: 100000
+      token_window: "1m"
+
+---
+# MaaS API Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: maas-api
+  namespace: maas-api
+  labels:
+    app.kubernetes.io/name: maas-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: model-as-a-service
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: maas-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: model-as-a-service
+
+---
+# MaaS API Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: maas-api
+  namespace: maas-api
+  labels:
+    app.kubernetes.io/name: maas-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: model-as-a-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: maas-api
+      app.kubernetes.io/component: api
+      app.kubernetes.io/part-of: model-as-a-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: maas-api
+        app.kubernetes.io/component: api
+        app.kubernetes.io/part-of: model-as-a-service
+    spec:
+      serviceAccountName: maas-api
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+      containers:
+      - name: maas-api
+        image: quay.io/opendatahub/maas-api:77716126abd261a7f8a7ca2e040e3307c998ca4d
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        env:
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: PROVIDER
+          value: sa-tokens
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+        securityContext:
+          runAsNonRoot: true
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3

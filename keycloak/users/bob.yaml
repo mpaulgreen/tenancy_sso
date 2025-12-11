@@ -1,0 +1,27 @@
+apiVersion: keycloak.org/v1alpha1
+kind: KeycloakUser
+metadata:
+  name: bob-tenant-b
+  namespace: sso
+  labels:
+    app: sso
+    tenant: tenant-b
+    role: admin
+spec:
+  user:
+    username: bob
+    email: bob@tenant-b.com
+    emailVerified: true
+    enabled: true
+    firstName: bob
+    lastName: admin
+    credentials:
+      - type: password
+        value: "password123"
+        temporary: false
+    attributes:
+      accountId:
+        - tenant-b
+  realmSelector:
+    matchLabels:
+      app: sso

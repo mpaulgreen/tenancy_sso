@@ -1,0 +1,154 @@
+# Tenant-owned Grafana deployment
+# Each tenant deploys their own Grafana instance in their monitoring namespace
+#
+# Apply as tenant admin:
+# oc apply -f 02-grafana-deployment.yaml
+#
+# Wait for deployment:
+# oc wait --for=condition=available deployment/tenant-b-grafana -n tenant-b-monitoring --timeout=300s
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tenant-b-grafana-storage
+  namespace: tenant-b-monitoring
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: gp3-csi
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tenant-b-grafana-credentials
+  namespace: tenant-b-monitoring
+type: Opaque
+stringData:
+  admin-user: admin
+  admin-password: changeme-please
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tenant-b-grafana
+  namespace: tenant-b-monitoring
+  labels:
+    app: tenant-b-grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tenant-b-grafana
+  template:
+    metadata:
+      labels:
+        app: tenant-b-grafana
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: grafana
+        image: grafana/grafana:latest
+        ports:
+        - containerPort: 3000
+          name: http
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        env:
+        - name: GF_SECURITY_ADMIN_USER
+          valueFrom:
+            secretKeyRef:
+              name: tenant-b-grafana-credentials
+              key: admin-user
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: tenant-b-grafana-credentials
+              key: admin-password
+        - name: GF_SERVER_ROOT_URL
+          value: "https://tenant-b-grafana-tenant-b-monitoring.apps.minai.kni.syseng.devcluster.openshift.com"
+        - name: GF_INSTALL_PLUGINS
+          value: ""
+        volumeMounts:
+        - name: storage
+          mountPath: /var/lib/grafana
+        - name: datasources
+          mountPath: /etc/grafana/provisioning/datasources
+        - name: dashboards-provisioning
+          mountPath: /etc/grafana/provisioning/dashboards
+        - name: dashboards
+          mountPath: /var/lib/grafana/dashboards
+        resources:
+          requests:
+            cpu: "250m"
+            memory: 512Mi
+          limits:
+            cpu: "500m"
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: storage
+        persistentVolumeClaim:
+          claimName: tenant-b-grafana-storage
+      - name: datasources
+        configMap:
+          name: tenant-b-grafana-datasources
+      - name: dashboards-provisioning
+        configMap:
+          name: tenant-b-grafana-dashboards-provisioning
+      - name: dashboards
+        configMap:
+          name: tenant-b-grafana-dashboards
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tenant-b-grafana
+  namespace: tenant-b-monitoring
+spec:
+  selector:
+    app: tenant-b-grafana
+  ports:
+  - port: 3000
+    targetPort: 3000
+    name: http
+  type: ClusterIP
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: tenant-b-grafana
+  namespace: tenant-b-monitoring
+spec:
+  to:
+    kind: Service
+    name: tenant-b-grafana
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

@@ -1,0 +1,174 @@
+# Tenant Namespaces and Resource Quotas - Cluster Admin
+#
+# This file creates the tenant namespaces and sets resource quotas.
+# Only cluster admin can create/manage these namespaces and quotas.
+#
+# Prerequisites:
+# - Tenant RBAC setup completed (tenant-admin ClusterRole, Groups, RoleBindings)
+#   See: /Users/mrigankapaul/Documents/knowledgebase/gori_deliverables/tenancy/tenant_admin_rbac_implementation.md
+#
+# Apply with:
+# oc apply -f 03-tenant-namespaces.yaml
+
+---
+# Tenant A Models Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-a-models
+  labels:
+    tenant: tenant-a
+    function: models
+    app.kubernetes.io/part-of: model-as-a-service
+    # Pod Security Standards
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+
+---
+# Tenant B Models Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-b-models
+  labels:
+    tenant: tenant-b
+    function: models
+    app.kubernetes.io/part-of: model-as-a-service
+    # Pod Security Standards
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+
+---
+# ResourceQuota for Tenant A
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: tenant-a-quota
+  namespace: tenant-a-models
+  labels:
+    tenant: tenant-a
+spec:
+  hard:
+    requests.cpu: "100"
+    requests.memory: 500Gi
+    requests.nvidia.com/gpu: "10"
+    limits.cpu: "200"
+    limits.memory: 1000Gi
+    limits.nvidia.com/gpu: "10"
+    persistentvolumeclaims: "20"
+    pods: "50"
+    services.loadbalancers: "0"  # Prevent tenant from creating LB services
+
+---
+# ResourceQuota for Tenant B
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: tenant-b-quota
+  namespace: tenant-b-models
+  labels:
+    tenant: tenant-b
+spec:
+  hard:
+    requests.cpu: "50"
+    requests.memory: 250Gi
+    requests.nvidia.com/gpu: "5"
+    limits.cpu: "100"
+    limits.memory: 500Gi
+    limits.nvidia.com/gpu: "5"
+    persistentvolumeclaims: "10"
+    pods: "25"
+    services.loadbalancers: "0"
+
+---
+# NetworkPolicy for Tenant A - Isolation ## NOT TESTED ##
+# Optional: Uncomment if strict network isolation is required
+# apiVersion: networking.k8s.io/v1
+# kind: NetworkPolicy
+# metadata:
+#   name: tenant-a-isolation
+#   namespace: tenant-a-models
+#   labels:
+#     tenant: tenant-a
+# spec:
+#   podSelector: {}
+#   policyTypes:
+#   - Ingress
+#   - Egress
+#   ingress:
+#   # Allow from gateway namespace
+#   - from:
+#     - namespaceSelector:
+#         matchLabels:
+#           kubernetes.io/metadata.name: openshift-ingress
+#   # Allow from same namespace
+#   - from:
+#     - podSelector: {}
+#   egress:
+#   # Allow DNS
+#   - to:
+#     - namespaceSelector:
+#         matchLabels:
+#           kubernetes.io/metadata.name: openshift-dns
+#     ports:
+#     - protocol: UDP
+#       port: 53
+#   # Allow to MaaS API
+#   - to:
+#     - namespaceSelector:
+#         matchLabels:
+#           kubernetes.io/metadata.name: maas-api
+#     ports:
+#     - protocol: TCP
+#       port: 8080
+#   # Allow HTTPS to external (for model download if needed)
+#   - to:
+#     - namespaceSelector: {}
+#     ports:
+#     - protocol: TCP
+#       port: 443
+
+---
+# NetworkPolicy for Tenant B - Isolation
+# Optional: Uncomment if strict network isolation is required
+# apiVersion: networking.k8s.io/v1
+# kind: NetworkPolicy
+# metadata:
+#   name: tenant-b-isolation
+#   namespace: tenant-b-models
+#   labels:
+#     tenant: tenant-b
+# spec:
+#   podSelector: {}
+#   policyTypes:
+#   - Ingress
+#   - Egress
+#   ingress:
+#   - from:
+#     - namespaceSelector:
+#         matchLabels:
+#           kubernetes.io/metadata.name: openshift-ingress
+#   - from:
+#     - podSelector: {}
+#   egress:
+#   - to:
+#     - namespaceSelector:
+#         matchLabels:
+#           kubernetes.io/metadata.name: openshift-dns
+#     ports:
+#     - protocol: UDP
+#       port: 53
+#   - to:
+#     - namespaceSelector:
+#         matchLabels:
+#           kubernetes.io/metadata.name: maas-api
+#     ports:
+#     - protocol: TCP
+#       port: 8080
+#   - to:
+#     - namespaceSelector: {}
+#     ports:
+#     - protocol: TCP
+#       port: 443

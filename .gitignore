@@ -1,0 +1,52 @@
+# for billing app
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+dist/
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+*.prof
+coverage.html
+coverage.txt
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Vendor directory (if using go mod vendor)
+vendor/
+
+# Environment variables and configs
+.env
+.env.*
+config.yaml
+*.local
+
+# Kubernetes secrets (if accidentally created locally)
+secrets/
+*.secret.yaml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
+
+# Container build artifacts
+*.tar
+*.tar.gz
