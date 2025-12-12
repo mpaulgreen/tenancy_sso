@@ -504,12 +504,19 @@ oc get group tenant-a-admins -o yaml
 oc get group tenant-b-admins -o yaml
 ```
 
-### 3.4 Create RoleBindings for Tenant Admins
+### 3.4 Create RoleBindings for All Tenant User Groups
 
-**Bind tenant-admin ClusterRole to tenant groups:**
+**IMPORTANT**: Create RoleBindings for ALL user groups (admins, developers, ml-engineers) during initial setup. This ensures all users can see their tenant projects immediately upon login.
+
+**Permission Model:**
+- **Admins** → `tenant-admin` ClusterRole (full namespace admin + RBAC management)
+- **Developers** → `view` ClusterRole (read-only access)
+- **ML Engineers** → `edit` ClusterRole (create/modify resources, no RBAC)
+
+**Tenant A RoleBindings:**
 
 ```bash
-# Tenant A admin role bindings
+# Tenant A - Admins (full namespace admin)
 oc create rolebinding tenant-a-admins-binding \
   --clusterrole=tenant-admin \
   --group=tenant-a-admins \
@@ -525,7 +532,43 @@ oc create rolebinding tenant-a-admins-binding \
   --group=tenant-a-admins \
   -n tenant-a-monitoring
 
-# Tenant B admin role bindings
+# Tenant A - Developers (read-only)
+oc create rolebinding tenant-a-developers-view \
+  --clusterrole=view \
+  --group=tenant-a-developers \
+  -n tenant-a-models
+
+oc create rolebinding tenant-a-developers-view \
+  --clusterrole=view \
+  --group=tenant-a-developers \
+  -n tenant-a-data
+
+oc create rolebinding tenant-a-developers-view \
+  --clusterrole=view \
+  --group=tenant-a-developers \
+  -n tenant-a-monitoring
+
+# Tenant A - ML Engineers (edit access)
+oc create rolebinding tenant-a-ml-engineers-edit \
+  --clusterrole=edit \
+  --group=tenant-a-ml-engineers \
+  -n tenant-a-models
+
+oc create rolebinding tenant-a-ml-engineers-edit \
+  --clusterrole=edit \
+  --group=tenant-a-ml-engineers \
+  -n tenant-a-data
+
+oc create rolebinding tenant-a-ml-engineers-edit \
+  --clusterrole=edit \
+  --group=tenant-a-ml-engineers \
+  -n tenant-a-monitoring
+```
+
+**Tenant B RoleBindings:**
+
+```bash
+# Tenant B - Admins (full namespace admin)
 oc create rolebinding tenant-b-admins-binding \
   --clusterrole=tenant-admin \
   --group=tenant-b-admins \
@@ -545,10 +588,15 @@ oc create rolebinding tenant-b-admins-binding \
 **Verify RoleBindings:**
 
 ```bash
-# Check Tenant A role bindings
+# Check Tenant A role bindings for all groups
 oc get rolebinding -n tenant-a-models
 oc get rolebinding -n tenant-a-data
 oc get rolebinding -n tenant-a-monitoring
+
+# Verify specific bindings
+oc describe rolebinding tenant-a-admins-binding -n tenant-a-models
+oc describe rolebinding tenant-a-developers-view -n tenant-a-models
+oc describe rolebinding tenant-a-ml-engineers-edit -n tenant-a-models
 
 # Check Tenant B role bindings
 oc get rolebinding -n tenant-b-models
@@ -584,6 +632,54 @@ oc auth can-i create pods -n tenant-b-models --as=bob@tenant-b.com --as-group=te
 
 # Verify Tenant B admin CANNOT access Tenant A resources
 oc auth can-i create pods -n tenant-a-models --as=bob@tenant-b.com --as-group=tenant-b-admins
+# Should return: no
+```
+
+**Test Tenant A developers (read-only):**
+
+```bash
+# Developers can view resources
+oc auth can-i get pods -n tenant-a-models --as=tenant-a-dev1@tenant-a.com --as-group=tenant-a-developers
+# Should return: yes
+
+oc auth can-i get deployments -n tenant-a-models --as=tenant-a-dev1@tenant-a.com --as-group=tenant-a-developers
+# Should return: yes
+
+# Developers CANNOT create/modify resources
+oc auth can-i create pods -n tenant-a-models --as=tenant-a-dev1@tenant-a.com --as-group=tenant-a-developers
+# Should return: no
+
+oc auth can-i delete pods -n tenant-a-models --as=tenant-a-dev1@tenant-a.com --as-group=tenant-a-developers
+# Should return: no
+
+# Developers CANNOT access other tenant namespaces
+oc auth can-i get pods -n tenant-b-models --as=tenant-a-dev1@tenant-a.com --as-group=tenant-a-developers
+# Should return: no
+```
+
+**Test Tenant A ML engineers (edit access):**
+
+```bash
+# ML Engineers can view resources
+oc auth can-i get pods -n tenant-a-models --as=tenant-a-ml-eng1@tenant-a.com --as-group=tenant-a-ml-engineers
+# Should return: yes
+
+# ML Engineers CAN create/modify resources
+oc auth can-i create pods -n tenant-a-models --as=tenant-a-ml-eng1@tenant-a.com --as-group=tenant-a-ml-engineers
+# Should return: yes
+
+oc auth can-i delete pods -n tenant-a-models --as=tenant-a-ml-eng1@tenant-a.com --as-group=tenant-a-ml-engineers
+# Should return: yes
+
+oc auth can-i create deployments -n tenant-a-models --as=tenant-a-ml-eng1@tenant-a.com --as-group=tenant-a-ml-engineers
+# Should return: yes
+
+# ML Engineers CANNOT create RoleBindings (no RBAC management)
+oc auth can-i create rolebindings -n tenant-a-models --as=tenant-a-ml-eng1@tenant-a.com --as-group=tenant-a-ml-engineers
+# Should return: no
+
+# ML Engineers CANNOT access other tenant namespaces
+oc auth can-i get pods -n tenant-b-models --as=tenant-a-ml-eng1@tenant-a.com --as-group=tenant-a-ml-engineers
 # Should return: no
 ```
 
@@ -790,38 +886,63 @@ oc label namespace tenant-a-apps \
 
 Once a cluster admin has granted you tenant admin access, you can perform these operations.
 
-### 4.1 Create RoleBindings for Developers and ML Engineers
+### 4.1 Manage Additional RoleBindings (Optional)
 
-**As Tenant A admin (alice@tenant-a.com):**
+**NOTE**: RoleBindings for developers and ML engineers are already created by the cluster admin during tenant setup (Section 3.4). This section shows how tenant admins can create ADDITIONAL RoleBindings if needed for new users or custom access levels.
+
+**Existing RoleBindings (created by cluster admin):**
+- ✅ `tenant-a-admins-binding` → `tenant-admin` ClusterRole → `tenant-a-admins` group
+- ✅ `tenant-a-developers-view` → `view` ClusterRole → `tenant-a-developers` group
+- ✅ `tenant-a-ml-engineers-edit` → `edit` ClusterRole → `tenant-a-ml-engineers` group
+
+**Example: Grant access to individual users (if not using groups):**
 
 ```bash
-# Grant view access to developers
-oc create rolebinding tenant-a-developers-view \
+# Grant view access to a specific developer
+oc create rolebinding dev-specific-view \
   --clusterrole=view \
-  --group=tenant-a-developers \
+  --user=newdev@tenant-a.com \
   -n tenant-a-models
 
-oc create rolebinding tenant-a-developers-view \
-  --clusterrole=view \
-  --group=tenant-a-developers \
-  -n tenant-a-data
-
-# Grant edit access to ML engineers
-oc create rolebinding tenant-a-ml-engineers-edit \
+# Grant edit access to a specific ML engineer
+oc create rolebinding ml-specific-edit \
   --clusterrole=edit \
-  --group=tenant-a-ml-engineers \
+  --user=newml@tenant-a.com \
   -n tenant-a-models
-
-oc create rolebinding tenant-a-ml-engineers-edit \
-  --clusterrole=edit \
-  --group=tenant-a-ml-engineers \
-  -n tenant-a-data
 ```
 
-**Verify:**
+**Example: Create custom role for specific use case:**
 
 ```bash
+# Create a custom role for read-only metrics access
+cat <<EOF | oc apply -f -
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: metrics-reader
+  namespace: tenant-a-models
+rules:
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["pods", "nodes"]
+  verbs: ["get", "list"]
+EOF
+
+# Bind it to a user
+oc create rolebinding metrics-reader-binding \
+  --role=metrics-reader \
+  --user=analyst@tenant-a.com \
+  -n tenant-a-models
+```
+
+**Verify existing RoleBindings:**
+
+```bash
+# List all RoleBindings in tenant namespaces
 oc get rolebindings -n tenant-a-models
+oc get rolebindings -n tenant-a-data
+oc get rolebindings -n tenant-a-monitoring
+
+# Describe specific RoleBinding
 oc describe rolebinding tenant-a-developers-view -n tenant-a-models
 ```
 
